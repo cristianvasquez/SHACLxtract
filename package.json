@@ -1,0 +1,26 @@
+{
+  "name": "shaclxtract",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generate SHACL shapes from RDF data: an RDF/JS dataset or a SPARQL endpoint.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": "./src/index.js",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "rdf-ext": "^2.6.0"
+  },
+  "devDependencies": {
+    "oxigraph": "^0.5.11",
+    "shacl-engine": "^1.1.2",
+    "vitest": "^5.0.3"
+  }
+}

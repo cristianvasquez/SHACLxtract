@@ -1,6 +1,6 @@
 # SHACLxtract
 
-A lightweight Node.js library to generate SHACL shapes from RDF data.
+A Node.js library to generate SHACL shapes from RDF data.
 
 The objective is to support two inputs and return the same output:
 
@@ -11,9 +11,9 @@ The objective is to support two inputs and return the same output:
 
 The caller can pass the resulting dataset to a SHACL validator, serialize it, or edit it. Extraction leaves the source data unchanged.
 
-**Status:** research and specification. The JavaScript API below is proposed; it is not implemented.
+**Status:** first implementation in [`src/`](src/), tested with `pnpm test` (local and endpoint extraction, validated with shacl-engine). No performance measurements yet.
 
-## Proposed API
+## API
 
 ```js
 // Generate shapes from a dataset already loaded in JavaScript.
@@ -25,9 +25,17 @@ const shapes = await extractShapes(data, {
 const shapesFromEndpoint = await extractShapesFromEndpoint(endpointUrl, {
   graph: { type: 'named', iri: 'https://example.org/data' }
 });
+
+// Union of selected graphs; optional shape naming.
+const shapesFromUnion = await extractShapes(data, {
+  graph: { type: 'union', graphs: [{ type: 'default' }, { type: 'named', iri: 'https://example.org/more' }] },
+  shapeIri: classIri => `https://example.org/shapes/${encodeURIComponent(classIri)}`
+});
 ```
 
-`data`, `shapes`, and `shapesFromEndpoint` are RDF/JS datasets. Both functions return the shapes dataset directly. Function names and options remain subject to implementation review.
+`data` and all results are RDF/JS datasets. Both functions return the shapes dataset directly. The observation counts and notices stay internal in v1. Function names and options remain subject to implementation review.
+
+Shape IRIs default to the class IRI with `Shape` appended. `shapeIri` replaces this rule. Extraction fails if two classes get the same shape IRI, or if a shape IRI already occurs in the source graph.
 
 Graph selection is explicit: use the default graph, a named graph, or a union of selected graphs. An endpoint's default graph follows its configured dataset semantics. To keep graphs separate, run extraction once for each graph. Generated shape quads go in the output dataset's default graph.
 
@@ -49,10 +57,10 @@ The initial constraint rules are:
 | No instance has more than one value | `sh:maxCount 1` |
 | All values have one literal datatype | `sh:datatype` |
 | Values have several literal datatypes | `sh:or` of datatype constraints |
-| Values share a node kind | `sh:nodeKind` |
-| All resource values belong to a class | `sh:class` on the resource branch |
+| Values share a node kind | `sh:nodeKind`, including combined kinds such as `sh:BlankNodeOrIRI` |
+| All resource values belong to a class | `sh:class` on the resource branch, most specific classes only |
 
-For mixed literal and resource values, generate alternatives that cover both. An untyped resource must remain allowed. Multiple types on one value must not increase its cardinality.
+For mixed literal and resource values, generate alternatives that cover both. An untyped resource must remain allowed. Multiple types on one value must not increase its cardinality. `rdf:type` gets no count constraints: one observed type per instance must not reject a second type later.
 
 These shapes describe the observed data. An observed pattern does not establish a requirement for future data. For example, one email per person in the source can suggest `sh:maxCount 1`, but the application may permit several emails.
 
@@ -93,9 +101,9 @@ ex:PersonShape a sh:NodeShape ;
 
 Both input methods must collect the same observations and apply the same constraint rules.
 
-For a local dataset, use JavaScript indexes to group instances and count values. For an endpoint, use SPARQL queries to obtain the observations, then generate the shapes locally. Endpoint extraction is part of the objective; the query strategy still needs specification.
+For a local dataset, use JavaScript indexes to group instances and count values. For an endpoint, use SPARQL aggregate queries to obtain the same observations, then generate the shapes locally. Only aggregates cross the network. The manifest specifies the queries per class: population, per-property count histogram, node kinds, datatypes, and common classes.
 
-For equivalent, stable source graphs, both methods should produce equivalent shapes, allowing different blank-node identifiers. Endpoint limits, pagination, authentication, and data changes between queries need explicit handling. A failed or truncated query must not silently produce a supposedly complete result. Sampling, if added, must be an explicit option.
+For equivalent, stable source graphs, both methods should produce equivalent shapes, allowing different blank-node identifiers. An endpoint's default graph can be a union of all graphs or include inference; extraction uses it as configured and does not guess. A failed or timed-out query is an error. Endpoints can truncate results without an error, so extraction compares each multi-row result with a one-row `COUNT(*)` of the same query; a mismatch is an error. Partial results inside a one-row aggregate cannot be detected. For endpoints, a union cannot include the default graph. Authentication, and data changes between queries, still need specification. Sampling, if added, must be an explicit option.
 
 ## Design and research
 
@@ -106,4 +114,4 @@ We use two projects as algorithm references:
 - **sheXer:** collect per-instance observations before selecting constraints.
 - **SHACL Play:** infer cardinality, node kind, datatype, and class constraints with separate rules.
 
-See the [research findings](docs/research.md) for source references and identified defects. The [Haskell manifest](spec/manifest.hs) specifies the current local algorithm. It contains type signatures and contracts, not an implementation; the endpoint adapter remains to be specified.
+See the [research findings](docs/research.md) for source references and identified defects. The [Haskell manifest](spec/manifest.hs) specifies the algorithm and the endpoint adapter. It contains type signatures and contracts, not an implementation.
