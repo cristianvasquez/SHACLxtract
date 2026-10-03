@@ -16,15 +16,14 @@ Both inputs give the same observations and the same constraint rules. The source
 
 No code was copied from them. [`docs/research.md`](docs/research.md) lists the reviewed commits, the ideas taken, and the defects not copied.
 
-**Status:** version 0.1.0, not published to npm. Local and endpoint extraction are implemented and tested (`pnpm test`; shapes are checked with [shacl-engine](https://github.com/rdf-ext/shacl-engine), endpoint results against [Oxigraph](https://github.com/oxigraph/oxigraph)). No performance measurements yet.
+**Status:** version 0.1.0. Local and endpoint extraction are implemented and tested (`pnpm test`; shapes are checked with [shacl-engine](https://github.com/rdf-ext/shacl-engine), endpoint results against [Oxigraph](https://github.com/oxigraph/oxigraph)). No performance measurements yet.
 
 ## Usage
 
-Requires Node.js 22 or later. `pnpm check:spec` typechecks the manifest (needs GHC).
+Requires Node.js 22 or later.
 
 ```sh
-pnpm install
-pnpm test
+npm install shaclxtract
 ```
 
 ```js
@@ -153,6 +152,14 @@ The endpoint adapter computes the same observations with SPARQL aggregate querie
 - Endpoints can truncate results without an error. Each multi-row result is compared with a one-row `COUNT(*)` of the same query; a mismatch is an `Incomplete` error.
 
 Known limits: truncation inside a one-row aggregate cannot be detected, and data changes between queries are not detected. There is no sampling.
+
+## Development
+
+```sh
+pnpm install
+pnpm test
+pnpm check:spec   # typechecks the manifest, needs GHC
+```
 
 ## Specification and research
 

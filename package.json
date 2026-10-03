@@ -1,8 +1,15 @@
 {
   "name": "shaclxtract",
   "version": "0.1.0",
-  "private": true,
   "description": "Generate SHACL shapes from RDF data: an RDF/JS dataset or a SPARQL endpoint.",
+  "keywords": [
+    "rdf",
+    "shacl",
+    "shapes",
+    "sparql",
+    "rdfjs",
+    "schema-extraction"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
