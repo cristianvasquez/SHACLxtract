@@ -1,90 +1,137 @@
 # SHACLxtract
 
-A Node.js library to generate SHACL shapes from RDF data.
-
-The objective is to support two inputs and return the same output:
+A Node.js library that generates SHACL shapes from RDF instance data.
 
 | Input | Output |
 | --- | --- |
-| An RDF/JS dataset | A new RDF/JS dataset containing SHACL shapes |
-| A SPARQL endpoint URL | A new RDF/JS dataset containing SHACL shapes |
+| An RDF/JS dataset | A new RDF/JS dataset with SHACL shapes |
+| A SPARQL endpoint URL | A new RDF/JS dataset with SHACL shapes |
 
-The caller can pass the resulting dataset to a SHACL validator, serialize it, or edit it. Extraction leaves the source data unchanged.
+Both inputs give the same observations and the same constraint rules. The source data does not change. The caller can validate, serialize or edit the result.
 
-**Status:** first implementation in [`src/`](src/), tested with `pnpm test` (local and endpoint extraction, validated with shacl-engine). No performance measurements yet.
+**Origin:** this library was vibecoded: an AI coding agent wrote the code, the specification and the tests. Two existing SHACL generators were the algorithm examples:
 
-## API
+- [sheXer](https://github.com/weso/shexer) (WESO): collect observations for each instance first, then select constraints.
+- [SHACL Play](https://github.com/sparna-git/shacl-play) (Sparna): infer cardinality, node kind, datatype and class constraints with separate rules.
 
-```js
-// Generate shapes from a dataset already loaded in JavaScript.
-const shapes = await extractShapes(data, {
-  graph: { type: 'default' }
-});
+No code was copied from them. [`docs/research.md`](docs/research.md) lists the reviewed commits, the ideas taken, and the defects not copied.
 
-// Generate shapes from data available through a SPARQL endpoint.
-const shapesFromEndpoint = await extractShapesFromEndpoint(endpointUrl, {
-  graph: { type: 'named', iri: 'https://example.org/data' }
-});
+**Status:** version 0.1.0, not published to npm. Local and endpoint extraction are implemented and tested (`pnpm test`; shapes are checked with [shacl-engine](https://github.com/rdf-ext/shacl-engine), endpoint results against [Oxigraph](https://github.com/oxigraph/oxigraph)). No performance measurements yet.
 
-// Union of selected graphs; optional shape naming.
-const shapesFromUnion = await extractShapes(data, {
-  graph: { type: 'union', graphs: [{ type: 'default' }, { type: 'named', iri: 'https://example.org/more' }] },
-  shapeIri: classIri => `https://example.org/shapes/${encodeURIComponent(classIri)}`
-});
+## Usage
+
+Requires Node.js 22 or later. `pnpm check:spec` typechecks the manifest (needs GHC).
+
+```sh
+pnpm install
+pnpm test
 ```
 
-`data` and all results are RDF/JS datasets. Both functions return the shapes dataset directly. The observation counts and notices stay internal in v1. Function names and options remain subject to implementation review.
+```js
+import { extractShapes, extractShapesFromEndpoint } from 'shaclxtract'
 
-Shape IRIs default to the class IRI with `Shape` appended. `shapeIri` replaces this rule. Extraction fails if two classes get the same shape IRI, or if a shape IRI already occurs in the source graph.
+// Dataset already loaded in JavaScript. Synchronous.
+const shapes = extractShapes(data, {
+  graph: { type: 'default' },
+  excludeProperties: ['http://www.w3.org/1999/02/22-rdf-syntax-ns#type']
+})
 
-Graph selection is explicit: use the default graph, a named graph, or a union of selected graphs. An endpoint's default graph follows its configured dataset semantics. To keep graphs separate, run extraction once for each graph. Generated shape quads go in the output dataset's default graph.
+// SPARQL endpoint. Asynchronous.
+const shapesFromEndpoint = await extractShapesFromEndpoint('https://example.org/sparql', {
+  graph: { type: 'named', iri: 'https://example.org/data' },
+  headers: { authorization: 'Bearer …' }
+})
+
+// Union of selected graphs, custom shape IRIs.
+const shapesFromUnion = extractShapes(data, {
+  graph: { type: 'union', graphs: [{ type: 'default' }, { type: 'named', iri: 'https://example.org/more' }] },
+  shapeIri: classIri => `https://example.org/shapes/${encodeURIComponent(classIri)}`
+})
+```
+
+`data` is an RDF/JS dataset or any iterable of quads. The result is an RDF/JS dataset with the shapes in its default graph. Type declarations are in [`src/index.d.ts`](src/index.d.ts).
+
+### Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `graph` | required | `{ type: 'default' }`, `{ type: 'named', iri }` or `{ type: 'union', graphs: [...] }` |
+| `classes` | all IRI-valued `rdf:type` objects | Class IRIs to extract. A selected class without instances gives an empty node shape. |
+| `excludeProperties` | `[]` | Property IRIs that get no property shape |
+| `countPolicy` | `'presence-and-singleton'` | `'presence-and-singleton'`, `'observed-extrema'` or `'none'` (see below) |
+| `shapeIri` | class IRI + `Shape` | Function from class IRI to shape IRI |
+
+Endpoint only:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `fetch` | `globalThis.fetch` | Fetch implementation |
+| `headers` | `{}` | Extra HTTP headers, for example `authorization` |
+| `timeout` | `60000` | Timeout per query, in milliseconds |
+
+### Errors
+
+- Invalid options: `TypeError`, before any work.
+- Two classes map to the same shape IRI, or a shape IRI already occurs in the source graph: `Error`.
+- Endpoint: `Error` with `code` `'QueryFailed'` (HTTP error, timeout, invalid response) or `'Incomplete'` (truncated results), and the failing `query`.
 
 ## How extraction works
 
+Graph selection is explicit: the default graph, a named graph, or a union of selected graphs. A union removes repeated triples. To keep graphs separate, run extraction once for each graph.
+
 For each selected class:
 
-1. Find its instances, including instances of declared subclasses within the selected graph.
+1. Find its instances, including instances of declared subclasses (`rdf:type/rdfs:subClassOf*`) in the selected graph.
 2. Find the properties used by those instances, including `rdf:type`.
 3. Count distinct values of each property for each instance. Count zero when a property is absent.
-4. Inspect the values: IRIs, blank nodes, literal datatypes, and resource classes.
+4. Inspect the values: IRIs, blank nodes, literal datatypes, and classes of resource values.
 5. Generate a node shape for the class and property shapes from these observations.
 
-The initial constraint rules are:
-
-| Observation | Proposed constraint |
+| Observation | Constraint |
 | --- | --- |
 | All instances have the property | `sh:minCount 1` |
 | No instance has more than one value | `sh:maxCount 1` |
-| All values have one literal datatype | `sh:datatype` |
-| Values have several literal datatypes | `sh:or` of datatype constraints |
-| Values share a node kind | `sh:nodeKind`, including combined kinds such as `sh:BlankNodeOrIRI` |
-| All resource values belong to a class | `sh:class` on the resource branch, most specific classes only |
+| All literal values have one datatype | `sh:datatype` |
+| Literal values have several datatypes | `sh:or` of datatype constraints |
+| Resource values share a node kind | `sh:nodeKind`, including combined kinds such as `sh:BlankNodeOrIRI` |
+| All resource values belong to a class | `sh:class`, most specific classes only |
 
-For mixed literal and resource values, generate alternatives that cover both. An untyped resource must remain allowed. Multiple types on one value must not increase its cardinality. `rdf:type` gets no count constraints: one observed type per instance must not reject a second type later.
+Count policies:
 
-These shapes describe the observed data. An observed pattern does not establish a requirement for future data. For example, one email per person in the source can suggest `sh:maxCount 1`, but the application may permit several emails.
+- `presence-and-singleton` (default): the two count rows above.
+- `observed-extrema`: the observed minimum (if above zero) and maximum.
+- `none`: no count constraints.
+
+Mixed literal and resource values give `sh:or` alternatives that cover both. One untyped resource value removes `sh:class`. Multiple types on one value do not increase its count. `rdf:type` gets no count constraints: one observed type per instance must not reject a second type later.
+
+The shapes describe the observed data, not requirements for future data. One email per person in the source gives `sh:maxCount 1`, but the application may permit several emails. Literals are not checked for lexical validity: an ill-typed source literal can violate the inferred `sh:datatype`. Validate the source data against the shapes before you use them.
 
 ## Example
 
-Suppose the input contains three people:
-
-| Person | Name values | Email values |
-| --- | --- | --- |
-| Alice | one string | two strings |
-| Bob | one string | one string |
-| Carol | one string | none |
-
-The generated shapes require one string name. Email values must be strings, but the initial rules impose no minimum or maximum count.
-
-The returned JavaScript dataset contains RDF quads. Serialized as Turtle, the relevant part would look like this:
+Input:
 
 ```turtle
 @prefix ex: <https://example.org/> .
+
+ex:alice a ex:Person ; ex:name "Alice" ; ex:email "a@x.org", "alice@x.org" .
+ex:bob   a ex:Person ; ex:name "Bob"   ; ex:email "bob@x.org" .
+ex:carol a ex:Person ; ex:name "Carol" .
+```
+
+Output, serialized as Turtle:
+
+```turtle
+@prefix ex: <https://example.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 ex:PersonShape a sh:NodeShape ;
     sh:targetClass ex:Person ;
+    sh:property [
+        sh:path ex:email ;
+        sh:datatype xsd:string
+    ] ;
     sh:property [
         sh:path ex:name ;
         sh:datatype xsd:string ;
@@ -92,26 +139,28 @@ ex:PersonShape a sh:NodeShape ;
         sh:maxCount 1
     ] ;
     sh:property [
-        sh:path ex:email ;
-        sh:datatype xsd:string
+        sh:path rdf:type ;
+        sh:nodeKind sh:IRI
     ] .
 ```
 
-## Local data and endpoints
+## SPARQL endpoints
 
-Both input methods must collect the same observations and apply the same constraint rules.
+The endpoint adapter computes the same observations with SPARQL aggregate queries (SPARQL 1.1 protocol, POST, JSON results). Only aggregates cross the network. Shapes are then generated locally with the same rules. For an equivalent, stable graph, endpoint and local extraction give the same shapes, up to blank-node labels.
 
-For a local dataset, use JavaScript indexes to group instances and count values. For an endpoint, use SPARQL aggregate queries to obtain the same observations, then generate the shapes locally. Only aggregates cross the network. The manifest specifies the queries per class: population, per-property count histogram, node kinds, datatypes, and common classes.
+- The endpoint's default graph is used as configured. It can be a union of all graphs or include inference; extraction does not guess.
+- Named graphs and unions use `FROM`. A union that includes the default graph cannot be expressed with `FROM` and is rejected.
+- Endpoints can truncate results without an error. Each multi-row result is compared with a one-row `COUNT(*)` of the same query; a mismatch is an `Incomplete` error.
 
-For equivalent, stable source graphs, both methods should produce equivalent shapes, allowing different blank-node identifiers. An endpoint's default graph can be a union of all graphs or include inference; extraction uses it as configured and does not guess. A failed or timed-out query is an error. Endpoints can truncate results without an error, so extraction compares each multi-row result with a one-row `COUNT(*)` of the same query; a mismatch is an error. Partial results inside a one-row aggregate cannot be detected. For endpoints, a union cannot include the default graph. Authentication, and data changes between queries, still need specification. Sampling, if added, must be an explicit option.
+Known limits: truncation inside a one-row aggregate cannot be detected, and data changes between queries are not detected. There is no sampling.
 
-## Design and research
+## Specification and research
 
-Keep the extraction core separate from parsing, serialization, and validation. The caller can validate the generated shapes with the existing validator. Local extraction should not require a SPARQL engine.
+- [`spec/manifest.hs`](spec/manifest.hs): the algorithm contract as Haskell types and signatures, with a map to the JS modules. It typechecks with `ghc -fno-code spec/manifest.hs`; it is not executable.
+- [`docs/research.md`](docs/research.md): review of sheXer and SHACL Play at fixed commits, with links to the source files.
 
-We use two projects as algorithm references:
+The core does not depend on parsers, serializers, SPARQL engines or validators. Local extraction does not need a SPARQL engine.
 
-- **sheXer:** collect per-instance observations before selecting constraints.
-- **SHACL Play:** infer cardinality, node kind, datatype, and class constraints with separate rules.
+## License
 
-See the [research findings](docs/research.md) for source references and identified defects. The [Haskell manifest](spec/manifest.hs) specifies the algorithm and the endpoint adapter. It contains type signatures and contracts, not an implementation.
+[MIT](LICENSE)

@@ -54,13 +54,14 @@ const propertyShape = (policy, superClasses) => ([path, evidence]) => {
 }
 
 /** Shapes sorted by class and path, with their evidence, and notices. */
-export function propose (profile, { countPolicy }) {
+export function propose (profile, { countPolicy, excluded }) {
   const shapes = [...profile.classes]
     .sort(([a], [b]) => byValue(a, b))
     .map(([targetClass, { population, properties }]) => ({
       targetClass,
       population,
       properties: [...properties]
+        .filter(([path]) => !excluded?.has(path))
         .sort(([a], [b]) => byValue(a, b))
         .flatMap(propertyShape(countPolicy, profile.superClasses))
     }))

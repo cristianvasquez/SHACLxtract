@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import rdf from 'rdf-ext'
 import { extractShapes } from '../src/index.js'
 import { describeShapes, EX, parse, RDF, validate } from './helpers.js'
 
@@ -12,7 +13,7 @@ const PEOPLE = `
 
 async function shapesOf (text, options = DEFAULT) {
   const data = await parse(text)
-  const shapes = await extractShapes(data, options)
+  const shapes = extractShapes(data, options)
   return { data, shapes, d: describeShapes(shapes) }
 }
 
@@ -140,6 +141,23 @@ describe('acceptance cases', () => {
     expect(d[EX + 'Doc'].properties[EX + 'title'].datatype).toBe(RDF + 'langString')
   })
 
+  it('excludeProperties removes property shapes; the source data still conforms', async () => {
+    const { data, shapes, d } = await shapesOf(PEOPLE, { ...DEFAULT, excludeProperties: [RDF + 'type', EX + 'email'] })
+    expect(Object.keys(d[EX + 'Person'].properties)).toEqual([EX + 'name'])
+    expect((await validate(shapes, data)).conforms).toBe(true)
+  })
+
+  it('extraction is synchronous', async () => {
+    const shapes = extractShapes(await parse(PEOPLE), DEFAULT)
+    expect(typeof shapes.then).toBe('undefined')
+    expect(shapes.size).toBeGreaterThan(0)
+  })
+
+  it('blank-node renaming does not change the result', async () => {
+    const text = label => `ex:a a ex:A ; ex:p _:${label}1 . _:${label}1 a ex:B ; ex:q _:${label}2 . _:${label}2 ex:r 1 .`
+    expect((await shapesOf(text('x'))).d).toEqual((await shapesOf(text('renamed'))).d)
+  })
+
   it('an explicitly selected empty class gives an empty node shape', async () => {
     const { d } = await shapesOf(PEOPLE, { ...DEFAULT, classes: [EX + 'Robot'] })
     expect(d).toEqual({ [EX + 'Robot']: { iri: EX + 'RobotShape', properties: {} } })
@@ -159,12 +177,20 @@ describe('graph selection', () => {
   `
 
   it('requires an explicit graph', async () => {
-    await expect(extractShapes(await parse(TRIG), {})).rejects.toThrow(/options.graph is required/)
+    const data = await parse(TRIG)
+    expect(() => extractShapes(data, {})).toThrow(/options.graph is required/)
   })
 
   it('a named graph ignores other graphs', async () => {
     const { d } = await shapesOf(TRIG, { graph: { type: 'named', iri: EX + 'g1' } })
     expect(d[EX + 'Person'].properties[EX + 'age']).toEqual({ datatype: 'xsd:integer', minCount: 1, maxCount: 1 })
+  })
+
+  it('additions to other graphs do not change a named-graph result', async () => {
+    const g1 = { graph: { type: 'named', iri: EX + 'g1' } }
+    const before = (await shapesOf(TRIG, g1)).d
+    const after = (await shapesOf(TRIG + 'ex:bob ex:age "x" ; ex:extra 1 . ex:g3 { ex:bob a ex:Robot ; ex:age 32 . }', g1)).d
+    expect(after).toEqual(before)
   })
 
   it('a union merges the selected graphs', async () => {
@@ -184,13 +210,13 @@ describe('graph selection', () => {
 
 describe('shape naming', () => {
   it('fails when two classes map to the same shape IRI', async () => {
-    await expect(extractShapes(await parse('ex:a a ex:A . ex:b a ex:B .'), { ...DEFAULT, shapeIri: () => EX + 'S' }))
-      .rejects.toThrow(/collision/)
+    const data = await parse('ex:a a ex:A . ex:b a ex:B .')
+    expect(() => extractShapes(data, { ...DEFAULT, shapeIri: () => EX + 'S' })).toThrow(/collision/)
   })
 
   it('fails when a shape IRI occurs in the source graph', async () => {
-    await expect(extractShapes(await parse('ex:a a ex:A . ex:AShape ex:p 1 .'), DEFAULT))
-      .rejects.toThrow(/already occurs/)
+    const data = await parse('ex:a a ex:A . ex:AShape ex:p 1 .')
+    expect(() => extractShapes(data, DEFAULT)).toThrow(/already occurs/)
   })
 
   it('accepts a custom naming function', async () => {
@@ -199,9 +225,15 @@ describe('shape naming', () => {
   })
 
   it('emitted blank nodes do not reuse input blank-node labels', async () => {
-    const data = await parse('ex:a a ex:A ; ex:p 1 .')
-    const shapes = await extractShapes(data, DEFAULT)
+    // shx1, shx2 are the labels emit allocates first.
+    const data = rdf.dataset([
+      rdf.quad(rdf.namedNode(EX + 'a'), rdf.namedNode(RDF + 'type'), rdf.namedNode(EX + 'A')),
+      rdf.quad(rdf.namedNode(EX + 'a'), rdf.namedNode(EX + 'p'), rdf.blankNode('shx1')),
+      rdf.quad(rdf.blankNode('shx2'), rdf.namedNode(EX + 'p'), rdf.literal('1'))
+    ])
+    const shapes = extractShapes(data, DEFAULT)
     const labels = new Set([...data].flatMap(q => [q.subject, q.object]).filter(t => t.termType === 'BlankNode').map(t => t.value))
+    expect(labels).toEqual(new Set(['shx1', 'shx2']))
     for (const q of shapes) for (const t of [q.subject, q.object]) if (t.termType === 'BlankNode') expect(labels.has(t.value)).toBe(false)
   })
 })

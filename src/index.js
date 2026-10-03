@@ -7,15 +7,17 @@ import { COUNT_POLICIES, propose } from './propose.js'
 import { defaultShapeIri, emit, nameShapes } from './emit.js'
 import { createClient, profileEndpoint, usedIris } from './endpoint.js'
 
-function normalizeOptions ({ graph, classes = null, countPolicy = 'presence-and-singleton', shapeIri = defaultShapeIri }) {
-  if (classes !== null && !(Array.isArray(classes) && classes.every(c => typeof c === 'string' && c !== ''))) {
-    throw new TypeError('options.classes must be an array of class IRIs')
-  }
+const iris = x => Array.isArray(x) && x.every(c => typeof c === 'string' && c !== '')
+
+function normalizeOptions ({ graph, classes = null, excludeProperties = [], countPolicy = 'presence-and-singleton', shapeIri = defaultShapeIri }) {
+  if (classes !== null && !iris(classes)) throw new TypeError('options.classes must be an array of class IRIs')
+  if (!iris(excludeProperties)) throw new TypeError('options.excludeProperties must be an array of property IRIs')
   if (!COUNT_POLICIES.includes(countPolicy)) throw new TypeError(`options.countPolicy must be one of: ${COUNT_POLICIES.join(', ')}`)
   if (typeof shapeIri !== 'function') throw new TypeError('options.shapeIri must be a function')
   return {
     scope: normalizeScope(graph),
     targets: classes && [...rdf.termSet(classes.map(c => rdf.namedNode(c)))],
+    excluded: rdf.termSet(excludeProperties.map(p => rdf.namedNode(p))),
     countPolicy,
     shapeIri
   }
@@ -24,13 +26,14 @@ function normalizeOptions ({ graph, classes = null, countPolicy = 'presence-and-
 const terms = dataset => [...dataset].flatMap(q => [q.subject, q.predicate, q.object])
 
 /**
- * Generate SHACL shapes from an RDF/JS dataset (or any iterable of quads).
+ * Generate SHACL shapes from an RDF/JS dataset (or any iterable of quads). Synchronous: returns the dataset.
  * options.graph: { type: 'default' } | { type: 'named', iri } | { type: 'union', graphs: [...] } (required)
  * options.classes: class IRIs to extract (default: every IRI-valued rdf:type object)
+ * options.excludeProperties: property IRIs that get no property shape (default: none)
  * options.countPolicy: 'presence-and-singleton' (default) | 'observed-extrema' | 'none'
  * options.shapeIri: classIri => shape IRI (default: classIri + 'Shape')
  */
-export async function extractShapes (data, options = {}) {
+export function extractShapes (data, options = {}) {
   if (typeof data?.[Symbol.iterator] !== 'function') throw new TypeError('data must be an iterable of quads')
   const o = normalizeOptions(options)
   const graph = selectGraph(data, o.scope)

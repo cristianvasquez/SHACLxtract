@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@rdfjs/types':
+        specifier: ^2.0.1
+        version: 2.0.1
       rdf-ext:
         specifier: ^2.6.0
         version: 2.6.0

@@ -27,7 +27,7 @@ describe('endpoint and local extraction give the same shapes', () => {
   for (const [name, graph] of Object.entries(scopes)) {
     for (const countPolicy of ['presence-and-singleton', 'observed-extrema']) {
       it(`${name} graph, ${countPolicy}`, async () => {
-        const local = describeShapes(await extractShapes(await parse(TRIG), { graph, countPolicy }))
+        const local = describeShapes(extractShapes(await parse(TRIG), { graph, countPolicy }))
         const remote = describeShapes(await extractShapesFromEndpoint(endpoint.url, { graph, countPolicy }))
         expect(Object.keys(local).length).toBeGreaterThan(0)
         expect(remote).toEqual(local)
@@ -37,7 +37,7 @@ describe('endpoint and local extraction give the same shapes', () => {
 
   it('explicit classes, including an empty one', async () => {
     const options = { graph: { type: 'default' }, classes: [EX + 'Agent', EX + 'Robot'] }
-    const local = describeShapes(await extractShapes(await parse(TRIG), options))
+    const local = describeShapes(extractShapes(await parse(TRIG), options))
     expect(describeShapes(await extractShapesFromEndpoint(endpoint.url, options))).toEqual(local)
     expect(local[EX + 'Robot'].properties).toEqual({})
   })
